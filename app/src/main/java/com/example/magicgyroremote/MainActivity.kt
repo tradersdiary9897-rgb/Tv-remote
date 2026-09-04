@@ -41,6 +41,592 @@ class MainActivity : Activity(), SensorEventListener {
     private val executor = Executors.newSingleThreadExecutor()
 
     /*
+     * Standard 3-button relative mouse HID descriptor.
+     */
+    private val mouseDescriptor: ByteArray =
+        intArrayOf(
+            0x05, 0x01,
+            0x09, 0x02,
+            0xA1, 0x01,
+
+            0x09, 0x01,
+            0xA1, 0x00,
+
+            // Buttons
+            0x05, 0x09,
+            0x19, 0x01,
+            0x29, 0x03,
+            0x15, 0x00,
+            0x25, 0x01,
+            0x95, 0x03,
+            0x75, 0x01,
+            0x81, 0x02,
+
+            // Padding
+            0x95, 0x01,
+            0x75, 0x05,
+            0x81, 0x01,
+
+            // X and Y
+            0x05, 0x01,
+            0x09, 0x30,
+            0x09, 0x31,
+            0x15, 0x81,
+            0x25, 0x7F,
+            0x75, 0x08,
+            0x95, 0x02,
+            0x81, 0x06,
+
+            0xC0,
+            0xC0
+        ).map { it.toByte() }.toByteArray()
+
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        sensorManager =
+            getSystemService(Context.SENSOR_SERVICE) as SensorManager
+
+        createInterface()
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+
+            requestPermissions(
+                arrayOf(
+                    Manifest.permission.BLUETOOTH_CONNECT,
+                    Manifest.permission.BLUETOOTH_ADVERTISE
+                ),
+                100
+            )
+
+        } else {
+            setupBluetooth()
+        }
+    }
+
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(
+            requestCode,
+            permissions,
+            grantResults
+        )
+
+        if (requestCode == 100) {
+
+            if (
+                grantResults.isNotEmpty() &&
+                grantResults.all {
+                    it == PackageManager.PERMISSION_GRANTED
+                }
+            ) {
+                setupBluetooth()
+            } else {
+                status.text =
+                    "Bluetooth permission denied"
+            }
+        }
+    }
+
+
+    private fun createInterface() {
+
+        val root = LinearLayout(this).apply {
+
+            orientation = LinearLayout.VERTICAL
+
+            gravity = Gravity.CENTER_HORIZONTAL
+
+            setPadding(
+                40,
+                60,
+                40,
+                40
+            )
+        }
+
+
+        val title = TextView(this).apply {
+
+            text = "MAGIC GYRO REMOTE"
+
+            textSize = 24f
+
+            gravity = Gravity.CENTER
+        }
+
+
+        status = TextView(this).apply {
+
+            text = "Starting..."
+
+            textSize = 16f
+
+            gravity = Gravity.CENTER
+
+            setPadding(
+                0,
+                30,
+                0,
+                30
+            )
+        }
+
+
+        val pairButton = Button(this).apply {
+
+            text = "Pair / Connect TV"
+
+            setOnClickListener {
+
+                startBluetoothSettings()
+            }
+        }
+
+
+        val calibrateButton = Button(this).apply {
+
+            text = "Calibrate"
+
+            setOnClickListener {
+
+                calibrate()
+            }
+        }
+
+
+        val instructions = TextView(this).apply {
+
+            text =
+                "1. Turn on Bluetooth\n\n" +
+                "2. Open Bluetooth accessories on the TV\n\n" +
+                "3. Pair with \"Magic Gyro Remote\"\n\n" +
+                "4. Hold the phone like a remote\n\n" +
+                "5. Move the phone to move the pointer\n\n" +
+                "6. Keep the phone still when starting"
+
+            textSize = 15f
+
+            setPadding(
+                0,
+                30,
+                0,
+                0
+            )
+        }
+
+
+        root.addView(title)
+        root.addView(status)
+        root.addView(pairButton)
+        root.addView(calibrateButton)
+        root.addView(instructions)
+
+        setContentView(root)
+    }
+
+
+    private fun calibrate() {
+
+        accumX = 0f
+        accumY = 0f
+
+        status.text =
+            "Calibrated — move phone gently"
+    }
+
+
+    private fun startBluetoothSettings() {
+
+        try {
+
+            startActivity(
+                Intent(Settings.ACTION_BLUETOOTH_SETTINGS)
+            )
+
+        } catch (e: Exception) {
+
+            status.text =
+                "Unable to open Bluetooth settings"
+        }
+    }
+
+
+    private fun setupBluetooth() {
+
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
+
+            status.text =
+                "Bluetooth HID requires Android 9+"
+
+            return
+        }
+
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+
+            if (
+                checkSelfPermission(
+                    Manifest.permission.BLUETOOTH_CONNECT
+                ) != PackageManager.PERMISSION_GRANTED
+            ) {
+
+                status.text =
+                    "Bluetooth permission required"
+
+                return
+            }
+        }
+
+
+        val manager =
+            getSystemService(
+                Context.BLUETOOTH_SERVICE
+            ) as BluetoothManager
+
+
+        val adapter =
+            manager.adapter
+
+
+        if (adapter == null) {
+
+            status.text =
+                "Bluetooth unavailable"
+
+            return
+        }
+
+
+        if (!adapter.isEnabled) {
+
+            status.text =
+                "Please turn on Bluetooth"
+
+            return
+        }
+
+
+        adapter.getProfileProxy(
+            this,
+
+            object : BluetoothProfile.ServiceListener {
+
+                override fun onServiceConnected(
+                    profile: Int,
+                    proxy: BluetoothProfile
+                ) {
+
+                    hid =
+                        proxy as? BluetoothHidDevice
+
+
+                    if (hid != null) {
+
+                        registerHid()
+
+                    } else {
+
+                        status.text =
+                            "Bluetooth HID unavailable"
+                    }
+                }
+
+
+                override fun onServiceDisconnected(
+                    profile: Int
+                ) {
+
+                    hid = null
+                    registered = false
+                    host = null
+
+                    status.text =
+                        "Bluetooth HID disconnected"
+                }
+            },
+
+            BluetoothProfile.HID_DEVICE
+        )
+    }
+
+
+    private fun registerHid() {
+
+        val h =
+            hid ?: return
+
+
+        val sdp =
+            BluetoothHidDeviceAppSdpSettings(
+                "Magic Gyro Remote",
+                "Gyroscope Mouse",
+                "Magic Gyro Remote",
+                BluetoothHidDevice.SUBCLASS1_NONE,
+                mouseDescriptor
+            )
+
+
+        val qos =
+            BluetoothHidDeviceAppQosSettings(
+                BluetoothHidDeviceAppQosSettings.SERVICE_BEST_EFFORT,
+                800,
+                9,
+                2,
+                0,
+                0
+            )
+
+
+        registered =
+            h.registerApp(
+                sdp,
+                null,
+                qos,
+                executor,
+
+                object : BluetoothHidDevice.Callback() {
+
+                    override fun onAppStatusChanged(
+                        device: BluetoothDevice?,
+                        registeredNow: Boolean
+                    ) {
+
+                        registered =
+                            registeredNow
+
+                        runOnUiThread {
+
+                            if (registeredNow) {
+
+                                status.text =
+                                    "Ready — pair with the TV"
+
+                            } else {
+
+                                status.text =
+                                    "HID registration stopped"
+                            }
+                        }
+                    }
+
+
+                    override fun onConnectionStateChanged(
+                        device: BluetoothDevice?,
+                        state: Int
+                    ) {
+
+                        runOnUiThread {
+
+                            when (state) {
+
+                                BluetoothProfile.STATE_CONNECTED -> {
+
+                                    host = device
+
+                                    status.text =
+                                        "CONNECTED — move phone"
+                                }
+
+
+                                BluetoothProfile.STATE_DISCONNECTED -> {
+
+                                    if (host == device) {
+                                        host = null
+                                    }
+
+                                    status.text =
+                                        "Disconnected"
+                                }
+                            }
+                        }
+                    }
+                }
+            )
+    }
+
+
+    private fun sendMove(
+        dx: Int,
+        dy: Int
+    ) {
+
+        val h =
+            hid ?: return
+
+
+        val device =
+            host ?: return
+
+
+        if (!registered) {
+            return
+        }
+
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+
+            if (
+                checkSelfPermission(
+                    Manifest.permission.BLUETOOTH_CONNECT
+                ) != PackageManager.PERMISSION_GRANTED
+            ) {
+                return
+            }
+        }
+
+
+        if (dx == 0 && dy == 0) {
+            return
+        }
+
+
+        val x =
+            dx.coerceIn(-127, 127).toByte()
+
+
+        val y =
+            dy.coerceIn(-127, 127).toByte()
+
+
+        val report =
+            byteArrayOf(
+                0,
+                x,
+                y
+            )
+
+
+        h.sendReport(
+            device,
+            0,
+            report
+        )
+    }
+
+
+    override fun onSensorChanged(
+        event: SensorEvent
+    ) {
+
+        if (
+            event.sensor.type !=
+            Sensor.TYPE_GYROSCOPE
+        ) {
+            return
+        }
+
+
+        val dt = 0.02f
+
+        val sensitivity = 5.5f
+
+
+        accumX +=
+            event.values[1] *
+            dt *
+            sensitivity
+
+
+        accumY +=
+            event.values[0] *
+            dt *
+            sensitivity
+
+
+        val dx =
+            accumX.roundToInt()
+
+
+        val dy =
+            (-accumY).roundToInt()
+
+
+        if (
+            abs(dx) >= 1 ||
+            abs(dy) >= 1
+        ) {
+
+            sendMove(
+                dx,
+                dy
+            )
+
+
+            accumX -= dx
+            accumY += dy
+        }
+    }
+
+
+    override fun onAccuracyChanged(
+        sensor: Sensor?,
+        accuracy: Int
+    ) {
+    }
+
+
+    override fun onResume() {
+
+        super.onResume()
+
+
+        val gyro =
+            sensorManager.getDefaultSensor(
+                Sensor.TYPE_GYROSCOPE
+            )
+
+
+        if (gyro == null) {
+
+            status.text =
+                "This phone has no gyroscope"
+
+            return
+        }
+
+
+        sensorManager.registerListener(
+            this,
+            gyro,
+            SensorManager.SENSOR_DELAY_GAME
+        )
+    }
+
+
+    override fun onPause() {
+
+        sensorManager.unregisterListener(this)
+
+        super.onPause()
+    }
+
+
+    override fun onDestroy() {
+
+        sensorManager.unregisterListener(this)
+
+        try {
+            hid?.unregisterApp()
+        } catch (_: Exception) {
+        }
+
+        executor.shutdown()
+
+        super.onDestroy()
+    }
+}
+    private var accumX = 0f
+    private var accumY = 0f
+
+    private val executor = Executors.newSingleThreadExecutor()
+
+    /*
      * Bluetooth HID mouse descriptor.
      *
      * Report:
